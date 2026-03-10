@@ -1,0 +1,42 @@
+{
+  "name": "ai-action-hub",
+  "version": "2.0.0",
+  "description": "Make your website's actions discoverable and executable by AI agents (ChatGPT, Gemini, Claude). Multi-layer discovery via JSON-LD, meta tags, llms.txt, and REST API.",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "ai",
+    "ai-agents",
+    "ai-seo",
+    "actions",
+    "chatgpt",
+    "gemini",
+    "claude",
+    "perplexity",
+    "cta",
+    "llms",
+    "llms-txt",
+    "schema-org",
+    "json-ld",
+    "openapi",
+    "sdk",
+    "nextjs",
+    "express"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
