@@ -1,6 +1,6 @@
 {
   "name": "ai-action-hub",
-  "version": "2.0.0",
+  "version": "1.2.0",
   "description": "The easiest way to let AI agents (ChatGPT, Gemini, Claude, Perplexity) execute actions on your website. Seamlessly bridge the gap between AI chat and your production code with automated discovery via JSON-LD, Meta Tags, and OpenAPI.",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
