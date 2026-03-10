@@ -93,6 +93,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 }
 ```
 
+> **⚠️ Important:** Do NOT wrap the `htmlBlock()` output in a container with `aria-hidden="true"`, `display: none`, `visibility: hidden`, or `clip: rect(0,0,0,0)`. AI scrapers strip hidden content entirely, which will make your actions invisible to AI agents. The SDK already handles the visual hiding for you.
+
 **That's it.** Your site is now AI-agent ready.
 
 ## What the SDK Does Automatically
