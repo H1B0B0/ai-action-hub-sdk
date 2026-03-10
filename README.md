@@ -32,6 +32,7 @@ export const hub = new AIActionHub({
   siteName: 'Your Site Name',
   siteDescription: 'Short description of what your site does',
   apiKey: 'your_api_key_from_ai_action_hub_dashboard', // get it at https://ai-action-hub.com
+  // basePath: '/ai',  // optional — defaults to /api/ai-actions
 });
 
 hub.registerAction({
@@ -100,13 +101,13 @@ Once wired up, the SDK serves all of these routes from the single catch-all hand
 
 | Route | What it does |
 |-------|-------------|
-| `GET /api/ai-actions` | Lists all available actions (JSON) with `intentUrl` per action |
-| `POST /api/ai-actions/:name` | Executes an action (for tool-enabled agents) |
-| `GET /api/ai-actions/:name/intent` | Serves an intent confirmation page (for browsing AI assistants) |
-| `GET /.well-known/ai-actions.json` | Full OpenAPI 3.1 spec |
-| `GET /.well-known/llms.txt` | llms.txt manifest |
-| `GET /llms.txt` | llms.txt alias |
-| `GET /robots.txt` | robots.txt with AI discovery hints |
+| `GET {basePath}` | Lists all available actions (JSON) with `intentUrl` per action |
+| `POST {basePath}/:name` | Executes an action (for tool-enabled agents) |
+| `GET {basePath}/:name/intent` | Serves an intent confirmation page (for browsing AI assistants) |
+| `GET {basePath}/openapi.json` | Full OpenAPI 3.1 spec |
+| `GET {basePath}/llms.txt` | llms.txt manifest |
+
+Where `{basePath}` defaults to `/api/ai-actions` unless overridden via the `basePath` config option.
 
 It also injects into your HTML:
 - **Meta tags** with `ai-instructions` that tell AI scrapers what actions are available
@@ -134,7 +135,102 @@ The SDK includes these intent links in all discovery manifests, including `llms.
 4. User clicks the link, sees the pre-filled form, and clicks confirm.
 5. The action executes and the user receives immediate feedback.
 
-## Express / Node.js
+## Custom Base Path
+
+By default, all SDK routes live under `/api/ai-actions`. You can change this with the `basePath` option:
+
+```typescript
+const hub = new AIActionHub({
+  siteUrl: 'https://your-site.com',
+  siteName: 'Your Site',
+  basePath: '/ai',  // routes now live under /ai/*
+});
+```
+
+This changes all routes: `/ai`, `/ai/openapi.json`, `/ai/llms.txt`, `/ai/:name/intent`, etc.
+
+Make sure your route file matches the base path. For example, with `basePath: '/ai'`:
+- Next.js App Router: `app/ai/[[...path]]/route.ts`
+- Next.js Pages Router: `pages/api/ai/[[...path]].ts`
+
+## Framework Integration
+
+### Next.js App Router
+This is the default recommended setup, covered in the [Quick Start](#quick-start) above.
+
+### Universal Handler (Fetch API)
+The `createHandler(hub)` function provides a universal Fetch API handler that returns `(Request) => Promise<Response | null>`. If the request path does not match your `basePath`, it returns `null`, allowing for easy middleware composition. This works in any environment supporting the Fetch API: Deno, Bun, Cloudflare Workers, and modern Node.js.
+
+```typescript
+import { createHandler } from 'ai-action-hub';
+import { hub } from './ai-hub';
+
+const handle = createHandler(hub);
+
+// In any Fetch API environment:
+const response = await handle(request);
+if (response) {
+  return response;
+}
+// Not an AI Action Hub route — handle normally
+```
+
+### Hono
+```typescript
+import { Hono } from 'hono';
+import { createHandler } from 'ai-action-hub';
+import { hub } from './ai-hub';
+
+const app = new Hono();
+const handle = createHandler(hub);
+
+app.all('/ai/*', async (c) => {
+  const response = await handle(c.req.raw);
+  return response ?? c.notFound();
+});
+```
+(Assuming `basePath` is `/ai`)
+
+### SvelteKit
+```typescript
+// src/routes/api/ai-actions/[...path]/+server.ts
+import { createHandler } from 'ai-action-hub';
+import { hub } from '$lib/ai-hub';
+import type { RequestHandler } from './$types';
+
+const handle = createHandler(hub);
+
+const handler: RequestHandler = async ({ request }) => {
+  const response = await handle(request);
+  return response ?? new Response('Not found', { status: 404 });
+};
+
+export const GET = handler;
+export const POST = handler;
+```
+
+### Remix
+```typescript
+// app/routes/api.ai-actions.$.tsx
+import type { LoaderFunctionArgs, ActionFunctionArgs } from '@remix-run/node';
+import { createHandler } from 'ai-action-hub';
+import { hub } from '~/lib/ai-hub';
+
+const handle = createHandler(hub);
+
+export async function loader({ request }: LoaderFunctionArgs) {
+  const response = await handle(request);
+  return response ?? new Response('Not found', { status: 404 });
+}
+
+export async function action({ request }: ActionFunctionArgs) {
+  const response = await handle(request);
+  return response ?? new Response('Not found', { status: 404 });
+}
+```
+
+### Express / Node.js
+Use the `createExpressMiddleware(hub)` helper to integrate with Express. It internally wraps `createHandler` and automatically calls `next()` for non-matching routes.
 
 ```typescript
 import express from 'express';
@@ -172,6 +268,7 @@ The SDK works without an API key for development, but you won't get analytics.
 | `siteName` | `string` | Yes | Your site's display name |
 | `siteDescription` | `string` | No | Short description — helps AI agents understand your site |
 | `apiKey` | `string` | No | API key from [ai-action-hub.com](https://ai-action-hub.com) |
+| `basePath` | `string` | No | Custom route prefix for all SDK endpoints (default: `/api/ai-actions`). Must start with `/`. |
 | `contactEmail` | `string` | No | Contact email (shown in OpenAPI spec) |
 
 ## Registering Actions
@@ -221,10 +318,16 @@ hub.registerAction({
 | `unregisterAction(name)` | Remove an action |
 | `getRegisteredActions()` | List registered action names |
 | `executeAction(name, params)` | Execute an action programmatically (bypassing HTTP) |
+| `getBasePath()` | Returns the configured base path string |
 | `headTags()` | Get all `<head>` HTML (meta tags + JSON-LD) |
 | `htmlBlock()` | Get the AI-readable HTML block for the page body (includes intent links) |
 | `handleRequest(request)` | Low-level request handler for API and Intent routes |
 | `getManifest()` | Get action definitions as JSON with intent URLs |
+| `createHandler(hub)` | Universal Fetch API handler — `(Request) => Promise<Response \| null>` |
+| `createNextHandler(hub)` | Next.js App Router handler — wraps `createHandler`, returns 404 on null |
+| `createExpressMiddleware(hub)` | Express middleware — wraps `createHandler`, calls `next()` on null |
+
+Note: `createHandler`, `createNextHandler`, and `createExpressMiddleware` are standalone exports, not methods on the `AIActionHub` class.
 
 ## How AI Discovery Works
 
@@ -239,7 +342,7 @@ The SDK supports two distinct interaction flows depending on the AI agent's capa
 ### Flow 2: Tool-Enabled AI (POST API)
 1. User asks a future agent with tool-calling capabilities to perform an action.
 2. The agent discovers the action through `llms.txt` or JSON-LD.
-3. The agent calls the POST endpoint directly: `POST https://example.com/api/ai-actions/join-waitlist`
+3. The agent calls the POST endpoint directly: `POST https://example.com/api/ai-actions/join-waitlist` (the path depends on your `basePath` configuration).
 4. Your handler runs, the user is added, and the agent confirms completion to the user.
 
 ## License

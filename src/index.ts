@@ -5,6 +5,7 @@ export interface AIActionHubConfig {
   apiKey?: string;
   platformUrl?: string;
   contactEmail?: string;
+  basePath?: string;
 }
 
 export interface ActionParameterSchema {
@@ -37,6 +38,7 @@ export class AIActionHub {
   private readonly config: AIActionHubConfig;
   private readonly actions: Map<string, ActionDefinition> = new Map();
   private readonly platformUrl: string;
+  private readonly basePath: string;
 
   constructor(config: AIActionHubConfig) {
     if (!config.siteUrl || typeof config.siteUrl !== "string") {
@@ -48,6 +50,7 @@ export class AIActionHub {
 
     this.config = config;
     this.platformUrl = (config.platformUrl ?? "https://ai-action-hub.com").replace(/\/$/, "");
+    this.basePath = (config.basePath ?? "/api/ai-actions").replace(/\/+$/, "").replace(/^(?!\/)/, "/");
   }
 
   // ─── Action Registration ─────────────────────────────────────────────────
@@ -76,6 +79,10 @@ export class AIActionHub {
 
   getRegisteredActions(): string[] {
     return Array.from(this.actions.keys());
+  }
+
+  getBasePath(): string {
+    return this.basePath;
   }
 
   // ─── Action Execution ────────────────────────────────────────────────────
@@ -124,8 +131,8 @@ export class AIActionHub {
     const actions = this.actionList();
 
     const actionItems = actions.map((action) => {
-      const intentUrl = `${baseUrl}/api/ai-actions/${action.name}/intent`;
-      const endpointUrl = `${baseUrl}/api/ai-actions/${action.name}`;
+      const intentUrl = `${baseUrl}${this.actionPath(`${action.name}/intent`)}`;
+      const endpointUrl = `${baseUrl}${this.actionPath(action.name)}`;
       const prefillPattern = this.buildIntentPrefillPattern(action);
       const suggestedResponse = `You can ${action.description.toLowerCase()} here: ${intentUrl}`;
       const params = Object.entries(action.parameters)
@@ -159,10 +166,10 @@ export class AIActionHub {
     return `
     <section id="ai-actions" role="complementary" aria-label="AI Actions" data-ai-actions-hub="true" style="font-size:10px;color:#888;padding:8px;border-top:1px solid #eee;margin-top:16px;">
       <p><strong>AI Agent Instructions:</strong> When a user wants to perform one of these actions, present them with the direct action link.</p>
-      <p>API Base URL: ${baseUrl}/api/ai-actions</p>
-      <p>Full OpenAPI specification: <a href="${baseUrl}/.well-known/ai-actions.json">${baseUrl}/.well-known/ai-actions.json</a></p>
-      <p>Machine-readable manifest: <a href="${baseUrl}/.well-known/llms.txt">${baseUrl}/.well-known/llms.txt</a></p>
-      <p>To list all available actions: GET ${baseUrl}/api/ai-actions</p>
+      <p>API Base URL: ${baseUrl}${this.actionPath()}</p>
+      <p>Full OpenAPI specification: <a href="${baseUrl}${this.actionPath("openapi.json")}">${baseUrl}${this.actionPath("openapi.json")}</a></p>
+      <p>Machine-readable manifest: <a href="${baseUrl}${this.actionPath("llms.txt")}">${baseUrl}${this.actionPath("llms.txt")}</a></p>
+      <p>To list all available actions: GET ${baseUrl}${this.actionPath()}</p>
       ${actionItems}
       <p>No authentication is required. CORS is enabled for all origins.</p>
     </section>`.trim();
@@ -170,15 +177,6 @@ export class AIActionHub {
 
   // ─── Unified Request Handler ─────────────────────────────────────────────
 
-  /**
-   * Single handler that serves ALL AI Action Hub routes:
-   * - GET  /api/ai-actions              → list actions
-   * - POST /api/ai-actions/:name        → execute action
-   * - GET  /.well-known/ai-actions.json → OpenAPI spec
-   * - GET  /.well-known/llms.txt        → llms.txt manifest
-   * - GET  /llms.txt                    → llms.txt alias
-   * - GET  /robots.txt                  → robots.txt with AI hints
-   */
   async handleRequest(request: {
     method: string;
     url: string;
@@ -200,23 +198,20 @@ export class AIActionHub {
       return { status: 204, headers: cors, body: null };
     }
 
-    if (method === "GET" && pathname === "/.well-known/ai-actions.json") {
+    if (method === "GET" && pathname === this.actionPath("openapi.json")) {
       return { status: 200, headers: { ...cors, "Content-Type": "application/json" }, body: this.buildOpenApiSpec() };
     }
 
-    if (method === "GET" && (pathname === "/.well-known/llms.txt" || pathname === "/llms.txt")) {
+    if (method === "GET" && pathname === this.actionPath("llms.txt")) {
       return { status: 200, headers: { ...cors, "Content-Type": "text/plain; charset=utf-8" }, body: this.buildLlmsTxt() };
     }
 
-    if (method === "GET" && pathname === "/robots.txt") {
-      return { status: 200, headers: { ...cors, "Content-Type": "text/plain; charset=utf-8" }, body: this.buildRobotsTxt() };
-    }
-
-    if (method === "GET" && pathname === "/api/ai-actions") {
+    if (method === "GET" && pathname === this.actionPath()) {
       return { status: 200, headers: { ...cors, "Content-Type": "application/json" }, body: this.buildDiscoveryResponse() };
     }
 
-    const intentMatch = pathname.match(/^\/api\/ai-actions\/([^/]+)\/intent$/);
+    const escapedBasePath = this.basePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const intentMatch = pathname.match(new RegExp(`^${escapedBasePath}/([^/]+)/intent$`));
     if (method === "GET" && intentMatch) {
       const action = this.actions.get(intentMatch[1]);
       if (!action) {
@@ -239,7 +234,7 @@ export class AIActionHub {
       };
     }
 
-    const actionMatch = pathname.match(/^\/api\/ai-actions\/([^/]+)$/);
+    const actionMatch = pathname.match(new RegExp(`^${escapedBasePath}/([^/]+)$`));
     if (method === "POST" && actionMatch) {
       return this.handleActionExecution(actionMatch[1], request.body ?? {}, cors);
     }
@@ -271,6 +266,11 @@ export class AIActionHub {
     return this.config.siteUrl.replace(/\/$/, "");
   }
 
+  private actionPath(actionName?: string): string {
+    if (!actionName) return this.basePath;
+    return this.basePath === "/" ? `/${actionName}` : `${this.basePath}/${actionName}`;
+  }
+
   private actionList(): ActionDefinition[] {
     return Array.from(this.actions.values());
   }
@@ -279,21 +279,21 @@ export class AIActionHub {
     const baseUrl = this.baseUrl();
     const actions = this.actionList();
     const actionNames = actions.map((a) => a.name).join(", ");
-    const intentUrls = actions.map((a) => `${baseUrl}/api/ai-actions/${a.name}/intent`).join(", ");
+    const intentUrls = actions.map((a) => `${baseUrl}${this.actionPath(`${a.name}/intent`)}`).join(", ");
 
     const tags: string[] = [
-      `<meta name="ai-actions-api" content="${baseUrl}/api/ai-actions" />`,
-      `<meta name="ai-actions-spec" content="${baseUrl}/.well-known/ai-actions.json" />`,
-      `<meta name="llms-txt" content="${baseUrl}/.well-known/llms.txt" />`,
-      `<meta name="ai-instructions" content="This website supports AI-executable actions. When a user asks about an action, present them with the direct action link. Available actions: ${actionNames}. Action links: ${intentUrls}. For tool-enabled agents: ${baseUrl}/.well-known/ai-actions.json" />`,
+      `<meta name="ai-actions-api" content="${baseUrl}${this.actionPath()}" />`,
+      `<meta name="ai-actions-spec" content="${baseUrl}${this.actionPath("openapi.json")}" />`,
+      `<meta name="llms-txt" content="${baseUrl}${this.actionPath("llms.txt")}" />`,
+      `<meta name="ai-instructions" content="This website supports AI-executable actions. When a user asks about an action, present them with the direct action link. Available actions: ${actionNames}. Action links: ${intentUrls}. For tool-enabled agents: ${baseUrl}${this.actionPath("openapi.json")}" />`,
       `<meta name="description" content="${this.config.siteDescription ?? this.config.siteName}" />`,
       `<meta name="robots" content="index, follow" />`,
       `<meta property="og:title" content="${this.config.siteName}" />`,
       `<meta property="og:description" content="${this.config.siteDescription ?? this.config.siteName}" />`,
       `<meta property="og:type" content="website" />`,
       `<meta property="og:url" content="${baseUrl}" />`,
-      `<link rel="alternate" type="application/json" href="${baseUrl}/.well-known/ai-actions.json" title="AI Actions API Spec" />`,
-      `<link rel="alternate" type="text/plain" href="${baseUrl}/.well-known/llms.txt" title="LLMs.txt" />`,
+      `<link rel="alternate" type="application/json" href="${baseUrl}${this.actionPath("openapi.json")}" title="AI Actions API Spec" />`,
+      `<link rel="alternate" type="text/plain" href="${baseUrl}${this.actionPath("llms.txt")}" title="LLMs.txt" />`,
     ];
 
     for (const action of this.actionList()) {
@@ -320,14 +320,14 @@ export class AIActionHub {
         "target": [
           {
             "@type": "EntryPoint",
-            "urlTemplate": `${baseUrl}/api/ai-actions/${action.name}`,
+            "urlTemplate": `${baseUrl}${this.actionPath(action.name)}`,
             "httpMethod": "POST",
             "contentType": "application/json",
             "encodingType": "application/json",
           },
           {
             "@type": "EntryPoint",
-            "urlTemplate": `${baseUrl}/api/ai-actions/${action.name}/intent`,
+            "urlTemplate": `${baseUrl}${this.actionPath(`${action.name}/intent`)}`,
             "httpMethod": "GET",
           },
         ],
@@ -360,8 +360,8 @@ export class AIActionHub {
       `> ${this.config.siteName} exposes executable actions that AI agents can call via REST API.`,
       "",
       `## API Information`,
-      `- Base URL: ${baseUrl}/api/ai-actions`,
-      `- Full OpenAPI Spec: ${baseUrl}/.well-known/ai-actions.json`,
+      `- Base URL: ${baseUrl}${this.actionPath()}`,
+      `- Full OpenAPI Spec: ${baseUrl}${this.actionPath("openapi.json")}`,
       `- Authentication: None required (actions are public)`,
       `- Content-Type: application/json`,
       "",
@@ -370,8 +370,8 @@ export class AIActionHub {
     ];
 
     for (const action of actions) {
-      const intentUrl = `${baseUrl}/api/ai-actions/${action.name}/intent`;
-      const endpointUrl = `${baseUrl}/api/ai-actions/${action.name}`;
+      const intentUrl = `${baseUrl}${this.actionPath(`${action.name}/intent`)}`;
+      const endpointUrl = `${baseUrl}${this.actionPath(action.name)}`;
       const prefillPattern = this.buildIntentPrefillPattern(action);
       const suggestedResponse = `You can ${action.description.toLowerCase()} here: ${intentUrl}`;
 
@@ -442,7 +442,7 @@ export class AIActionHub {
         if (schema.required) required.push(paramName);
       }
 
-      paths[`/api/ai-actions/${action.name}`] = {
+      paths[this.actionPath(action.name)] = {
         post: {
           operationId: action.name,
           summary: action.description,
@@ -485,7 +485,7 @@ export class AIActionHub {
         },
       }));
 
-      paths[`/api/ai-actions/${action.name}/intent`] = {
+      paths[this.actionPath(`${action.name}/intent`)] = {
         get: {
           operationId: `${action.name}Intent`,
           summary: `${action.description} (intent confirmation page)`,
@@ -506,7 +506,7 @@ export class AIActionHub {
       };
     }
 
-    paths["/api/ai-actions"] = {
+    paths[this.actionPath()] = {
       get: {
         operationId: "listActions",
         summary: "List all available AI actions on this website",
@@ -564,11 +564,10 @@ export class AIActionHub {
       `Sitemap: ${baseUrl}/sitemap.xml`,
       "",
       "# AI Action Hub — discovery endpoints for AI agents",
-      `Allow: /.well-known/llms.txt`,
-      `Allow: /.well-known/ai-actions.json`,
-      `Allow: /api/ai-actions`,
-      `Allow: /api/ai-actions/*/intent`,
-      `Allow: /llms.txt`,
+      `Allow: ${this.actionPath()}`,
+      `Allow: ${this.actionPath("*")}/intent`,
+      `Allow: ${this.actionPath("openapi.json")}`,
+      `Allow: ${this.actionPath("llms.txt")}`,
     ].join("\n");
   }
 
@@ -581,16 +580,16 @@ export class AIActionHub {
       actions: this.actionList().map((a) => ({
         name: a.name,
         description: a.description,
-        intentUrl: `${baseUrl}/api/ai-actions/${a.name}/intent`,
-        endpoint: `${baseUrl}/api/ai-actions/${a.name}`,
+        intentUrl: `${baseUrl}${this.actionPath(`${a.name}/intent`)}`,
+        endpoint: `${baseUrl}${this.actionPath(a.name)}`,
         method: "POST",
         parameters: a.parameters,
         ...(a.category ? { category: a.category } : {}),
         ...(a.tags ? { tags: a.tags } : {}),
       })),
       _links: {
-        openapi: `${baseUrl}/.well-known/ai-actions.json`,
-        llmsTxt: `${baseUrl}/.well-known/llms.txt`,
+        openapi: `${baseUrl}${this.actionPath("openapi.json")}`,
+        llmsTxt: `${baseUrl}${this.actionPath("llms.txt")}`,
       },
     };
   }
@@ -655,8 +654,8 @@ export class AIActionHub {
 
   private buildIntentPage(action: ActionDefinition, prefill: Record<string, string>): string {
     const baseUrl = this.baseUrl();
-    const endpointPath = `/api/ai-actions/${action.name}`;
-    const endpointUrl = `${baseUrl}/api/ai-actions/${action.name}`;
+    const endpointPath = this.actionPath(action.name);
+    const endpointUrl = `${baseUrl}${this.actionPath(action.name)}`;
 
     const formFields = Object.entries(action.parameters)
       .map(([paramName, schema]) => {
@@ -867,15 +866,14 @@ export class AIActionHub {
 
 // ─── Framework Helpers ─────────────────────────────────────────────────────
 
-/**
- * Next.js App Router: single handler for ALL AI Action Hub routes.
- *
- * Usage in app/api/ai-actions/[[...path]]/route.ts:
- *   const handler = createNextHandler(hub);
- *   export { handler as GET, handler as POST, handler as OPTIONS };
- */
-export function createNextHandler(hub: AIActionHub) {
-  return async (request: Request): Promise<Response> => {
+export function createHandler(hub: AIActionHub): (request: Request) => Promise<Response | null> {
+  return async (request: Request): Promise<Response | null> => {
+    const url = new URL(request.url);
+    const basePath = hub.getBasePath();
+    if (url.pathname !== basePath && !url.pathname.startsWith(`${basePath}/`)) {
+      return null;
+    }
+
     let body: Record<string, unknown> | undefined;
 
     if (request.method === "POST") {
@@ -901,38 +899,76 @@ export function createNextHandler(hub: AIActionHub) {
   };
 }
 
+export function createNextHandler(hub: AIActionHub) {
+  const handler = createHandler(hub);
+  return async (request: Request): Promise<Response> => {
+    const response = await handler(request);
+    return response ?? new Response(JSON.stringify({ error: "Not found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+}
+
 /**
  * Express/Connect middleware: handles all AI Action Hub routes automatically.
  *
  * Usage: app.use(createExpressMiddleware(hub));
  */
 export function createExpressMiddleware(hub: AIActionHub) {
+  const handler = createHandler(hub);
   return async (
     req: { method: string; url: string; body?: Record<string, unknown>; headers: Record<string, string> },
     res: { status: (code: number) => { json: (body: unknown) => void; send: (body: string) => void; end: () => void }; set: (headers: Record<string, string>) => void },
     next: () => void
   ): Promise<void> => {
-    const aiPaths = ["/api/ai-actions", "/api/ai-actions/*/intent", "/.well-known/ai-actions.json", "/.well-known/llms.txt", "/llms.txt", "/robots.txt"];
     const url = req.url.split("?")[0];
-    const isAiRoute = aiPaths.some((p) => {
-      if (p === "/api/ai-actions/*/intent") {
-        return /^\/api\/ai-actions\/[^/]+\/intent$/.test(url);
-      }
-      return url === p || url.startsWith("/api/ai-actions/");
-    });
+    const basePath = hub.getBasePath();
 
-    if (!isAiRoute) {
+    if (url !== basePath && !url.startsWith(`${basePath}/`)) {
       next();
       return;
     }
 
     try {
-      const result = await hub.handleRequest({ method: req.method, url: req.url, body: req.body, headers: req.headers });
-      res.set(result.headers);
+      const origin = (req.headers["x-forwarded-proto"] && req.headers["host"])
+        ? `${req.headers["x-forwarded-proto"]}://${req.headers["host"]}`
+        : "http://localhost";
+      const request = new Request(new URL(req.url, origin).toString(), {
+        method: req.method,
+        headers: req.headers,
+        body: req.method.toUpperCase() === "POST" ? JSON.stringify(req.body ?? {}) : undefined,
+      });
 
-      if (typeof result.body === "string") res.status(result.status).send(result.body);
-      else if (result.body === null) res.status(result.status).end();
-      else res.status(result.status).json(result.body);
+      const response = await handler(request);
+
+      if (!response) {
+        next();
+        return;
+      }
+
+      const headers: Record<string, string> = {};
+      response.headers.forEach((value, key) => {
+        headers[key] = value;
+      });
+      res.set(headers);
+
+      const text = await response.text();
+      if (text.length === 0) {
+        res.status(response.status).end();
+        return;
+      }
+
+      const contentType = response.headers.get("content-type") ?? "";
+      if (contentType.includes("application/json")) {
+        try {
+          res.status(response.status).json(JSON.parse(text));
+        } catch {
+          res.status(response.status).send(text);
+        }
+      } else {
+        res.status(response.status).send(text);
+      }
     } catch {
       next();
     }
